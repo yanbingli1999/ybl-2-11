@@ -1,14 +1,29 @@
+import { useState, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useGameStore, selectCurrentOrder, selectAvailableOrders } from '../store/gameStore';
-import { getOrderStatusText, getUrgencyText } from '../game/OrderSystem';
+import { getOrderStatusText, getUrgencyText, sortOrders, calculateOrderRisk, SortType } from '../game/OrderSystem';
 import { formatMoney } from '../game/EconomySystem';
-import { Package, MapPin, Clock, AlertTriangle, Check } from 'lucide-react';
+import { Package, MapPin, Clock, AlertTriangle, Check, TrendingUp, Zap, Navigation, AlertCircle, CloudRain } from 'lucide-react';
 
 export default function OrderPanel() {
   const dispatch = useGameStore((state) => state.dispatch);
   const player = useGameStore((state) => state.player);
+  const vehicle = useGameStore((state) => state.vehicle);
+  const weather = useGameStore((state) => state.weather);
   const currentOrder = useGameStore(useShallow(selectCurrentOrder));
   const availableOrders = useGameStore(useShallow(selectAvailableOrders));
+  const [sortType, setSortType] = useState<SortType>('reward');
+
+  const sortedOrders = useMemo(() => {
+    return sortOrders(availableOrders, sortType);
+  }, [availableOrders, sortType]);
+
+  const sortButtons: { type: SortType; label: string; icon: typeof TrendingUp }[] = [
+    { type: 'reward', label: '报酬', icon: TrendingUp },
+    { type: 'deadline', label: '时间', icon: Clock },
+    { type: 'distance', label: '距离', icon: Navigation },
+    { type: 'urgency', label: '紧急', icon: AlertCircle },
+  ];
 
   const formatDeadline = (seconds: number) => {
     if (seconds <= 0) return '已超时';
@@ -94,9 +109,27 @@ export default function OrderPanel() {
       )}
 
       <div className="flex-1 overflow-y-auto space-y-2">
-        <h4 className="font-pixel text-xs text-gray-400 sticky top-0 bg-game-nightLight py-1">
-          可用订单 ({availableOrders.length})
-        </h4>
+        <div className="flex items-center justify-between sticky top-0 bg-game-nightLight py-1">
+          <h4 className="font-pixel text-xs text-gray-400">
+            可用订单 ({availableOrders.length})
+          </h4>
+          <div className="flex gap-1">
+            {sortButtons.map(({ type, label, icon: Icon }) => (
+              <button
+                key={type}
+                onClick={() => setSortType(type)}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-retro transition-all ${
+                  sortType === type
+                    ? 'bg-game-neon text-game-night'
+                    : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                }`}
+              >
+                <Icon size={12} />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {availableOrders.length === 0 ? (
           <div className="text-center py-8">
@@ -105,43 +138,56 @@ export default function OrderPanel() {
             <p className="font-retro text-xs text-gray-600">请稍候，新订单即将到来...</p>
           </div>
         ) : (
-          availableOrders.map((order) => (
-            <div
-              key={order.id}
-              className="bg-game-night/50 border border-gray-700 rounded p-3 hover:border-game-neon/50 transition-all space-y-2"
-            >
-              <div className="flex justify-between items-start">
-                <div>
-                  <div className="font-retro text-xs text-gray-400">
-                    {order.pickupLocation.name} → {order.deliveryLocation.name}
+          sortedOrders.map((order) => {
+            const risk = calculateOrderRisk(order, vehicle, player, weather);
+            return (
+              <div
+                key={order.id}
+                className="bg-game-night/50 border border-gray-700 rounded p-3 hover:border-game-neon/50 transition-all space-y-2"
+              >
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div className="font-retro text-xs text-gray-400">
+                      {order.pickupLocation.name} → {order.deliveryLocation.name}
+                    </div>
+                    <div className="font-retro text-lg text-game-streetLight">{formatMoney(order.reward)}</div>
                   </div>
-                  <div className="font-retro text-lg text-game-streetLight">{formatMoney(order.reward)}</div>
+                  <div className="text-right">
+                    <span className={`font-retro text-xs ${getDeadlineColor(order.deadline, order.maxDeadline)}`}>
+                      ⏱ {formatDeadline(order.deadline)}
+                    </span>
+                    <div className={`flex items-center gap-1 font-retro text-xs ${risk.color} mt-1`}>
+                      {risk.level === 'low_battery' && <Zap size={10} />}
+                      {risk.level === 'low_stamina' && <AlertTriangle size={10} />}
+                      {risk.level === 'bad_weather' && <CloudRain size={10} />}
+                      {risk.level === 'may_late' && <Clock size={10} />}
+                      {risk.level === 'recommended' && <Check size={10} />}
+                      {risk.message}
+                    </div>
+                  </div>
                 </div>
-                <span className={`font-retro text-xs ${getDeadlineColor(order.deadline, order.maxDeadline)}`}>
-                  ⏱ {formatDeadline(order.deadline)}
-                </span>
-              </div>
 
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3 text-xs font-retro text-gray-400">
-                  <span>距离: {order.distance}格</span>
-                  <span className={order.customerUrgency >= 4 ? 'text-game-danger' : ''}>
-                    紧急度: {'⭐'.repeat(order.customerUrgency)}
-                  </span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3 text-xs font-retro text-gray-400">
+                    <span>距离: {order.distance}格</span>
+                    <span className={order.customerUrgency >= 4 ? 'text-game-danger' : ''}>
+                      紧急度: {'⭐'.repeat(order.customerUrgency)}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleAcceptOrder(order.id)}
+                    disabled={!!player.currentOrderId}
+                    className={`pixel-btn pixel-btn-success text-xs ${
+                      player.currentOrderId ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <Check size={12} className="inline mr-1" />
+                    接单
+                  </button>
                 </div>
-                <button
-                  onClick={() => handleAcceptOrder(order.id)}
-                  disabled={!!player.currentOrderId}
-                  className={`pixel-btn pixel-btn-success text-xs ${
-                    player.currentOrderId ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
-                >
-                  <Check size={12} className="inline mr-1" />
-                  接单
-                </button>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 

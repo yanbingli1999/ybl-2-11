@@ -1,4 +1,4 @@
-import { Order, MapData, Position } from './types';
+import { Order, MapData, Position, VehicleState, PlayerState, WeatherState } from './types';
 import {
   MIN_ORDER_REWARD,
   MAX_ORDER_REWARD,
@@ -6,8 +6,73 @@ import {
   MAX_ORDER_DISTANCE,
   LOCATION_NAMES,
   GRID_SIZE,
+  BASE_SPEED,
 } from './constants';
 import { getNearestRoadPosition } from './mapData';
+
+export type SortType = 'reward' | 'deadline' | 'distance' | 'urgency';
+
+export type RiskLevel = 'recommended' | 'normal' | 'low_battery' | 'low_stamina' | 'bad_weather' | 'may_late';
+
+export interface OrderRisk {
+  level: RiskLevel;
+  message: string;
+  color: string;
+}
+
+export function sortOrders(orders: Order[], sortType: SortType): Order[] {
+  const sorted = [...orders];
+  switch (sortType) {
+    case 'reward':
+      return sorted.sort((a, b) => b.reward - a.reward);
+    case 'deadline':
+      return sorted.sort((a, b) => a.deadline - b.deadline);
+    case 'distance':
+      return sorted.sort((a, b) => a.distance - b.distance);
+    case 'urgency':
+      return sorted.sort((a, b) => b.customerUrgency - a.customerUrgency);
+    default:
+      return sorted;
+  }
+}
+
+export function calculateOrderRisk(
+  order: Order,
+  vehicle: VehicleState,
+  player: PlayerState,
+  weather: WeatherState
+): OrderRisk {
+  const batteryRatio = vehicle.battery / vehicle.maxBattery;
+  const staminaRatio = player.stamina / player.maxStamina;
+  const deadlineRatio = order.deadline / order.maxDeadline;
+
+  const estimatedTime = order.distance * 1.5;
+  const weatherPenalty = 1 / weather.speedModifier;
+  const adjustedTime = estimatedTime * weatherPenalty;
+
+  const isLowBattery = batteryRatio < 0.3 && order.distance > 5;
+  const isLowStamina = staminaRatio < 0.3 && order.customerUrgency >= 4;
+  const isBadWeather = weather.type === 'heavy_rain' || weather.type === 'storm';
+  const mayLate = adjustedTime > order.deadline * 0.8;
+  const isRecommended = !isLowBattery && !isLowStamina && !isBadWeather && !mayLate && deadlineRatio > 0.5;
+
+  if (isLowBattery) {
+    return { level: 'low_battery', message: '低电风险', color: 'text-yellow-400' };
+  }
+  if (isLowStamina) {
+    return { level: 'low_stamina', message: '体力不足', color: 'text-orange-400' };
+  }
+  if (isBadWeather) {
+    return { level: 'bad_weather', message: '天气影响', color: 'text-blue-400' };
+  }
+  if (mayLate) {
+    return { level: 'may_late', message: '可能迟到', color: 'text-red-400' };
+  }
+  if (isRecommended) {
+    return { level: 'recommended', message: '适合接单', color: 'text-green-400' };
+  }
+  return { level: 'normal', message: '普通订单', color: 'text-gray-400' };
+}
 
 export function generateOrder(
   map: MapData,
